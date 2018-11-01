@@ -1,0 +1,24 @@
+using System;
+
+public class VAInline
+{
+	public void main()
+	{
+		string CurrentAudioDevice = VA.GetText("~~CurrentAudioDevice"); // Retrieve name of current audio device from VoiceAttack text variable
+		string[] EnabledDeviceList = VA.GetText("~~EnabledDeviceList").Trim(';').Split(';'); // Retrieve (and process) list of enabled audio devices from VoiceAttack text variable
+		int j; // Declare integer variable for indexing the device list
+		int DeviceCount = EnabledDeviceList.Length; // Initialize integer variable for storing the number of audio devices
+		for (j = 0; j < DeviceCount; j++) // Loop through each audio device
+		{
+			if (EnabledDeviceList[j] == CurrentAudioDevice) // Check if the indexed EnabledDevice equals the CurrentAudioDevice
+			{
+				if ( j != DeviceCount - 1) // Check if j does not equal the device count minus 1 (i.e., CurrentAudioDevice is not the last device in EnabledDeviceList)
+					j++; // Increment j by 1
+				else
+					j = 0; // Set j equal to 0
+				break; // Break out of parent 'for' loop
+			}
+		}
+		VA.SetText("~~AudioDevice", EnabledDeviceList[j]); // Store name of desired audio device in VoiceAttack text variable
+	}
+}

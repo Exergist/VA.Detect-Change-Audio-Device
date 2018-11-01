@@ -1,0 +1,278 @@
+using Microsoft.Win32;
+using System;
+using System.Collections.Generic;
+
+public class VAInline
+{
+	public void main()
+	{
+		string RequestedDeviceStatus = VA.GetText("~~AudioDeviceStatus").ToLower(); // Initialize string variable for storing audio device status of interest
+		if (RequestedDeviceStatus != "active" && RequestedDeviceStatus != "enabled" && RequestedDeviceStatus != "verify") // Check RequestedDeviceStatus to ensure valid input was provided
+		{
+			VA.WriteToLog("Invalid AudioDeviceStatus specified. Info request canceled", "red"); // Output info to event log);
+			return; // Immediately stop processing the inline function
+		}
+		string[] DeviceRegistryName = { "Capture", "Render" }; // Declare string array for storing the registry name(s) for the device type of interest
+		RegistryKey RootKey; // Initialize RegistryKey for containing the root (base) key to evaluate
+		if (Environment.Is64BitOperatingSystem) // Check if operating system is 64-bit
+			RootKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64); // Opens registry's LocalMachine key with a 64-bit view
+		else
+			RootKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry32); // Opens registry's LocalMachine key with a 32-bit view
+		string AudioKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio"; // Parent registry key for audio devices
+		//string DeviceType; // Declare string variables for storing audio device information
+		string EnabledDeviceList = null; // Initialize string variable for storing list of enabled devices
+		string EnabledPlaybackDeviceList = null; // Initialize string variable for storing list of enabled audio playback devices
+		string EnabledRecordingDeviceList = null; // Initialize string variable for storing list of enabled audio recording devices
+		List<string> AudioDeviceResults = new List<string>(); // Initialize string list for storing audio device information
+		int m = 0; // Initialize integer variable for 
+		using (RegistryKey ChildKey = RootKey.OpenSubKey(AudioKey)) // Open subkey of AudioKey and store in ChildKey. "using" implemented for proper disposal.
+		{
+			foreach (string ChildKeyName in ChildKey.GetSubKeyNames()) // Loop through each SubKeyName in ChildKey
+			{
+				foreach (string RegName in DeviceRegistryName) // Loop through each RegName in DeviceRegistryName
+				{
+					if (ChildKeyName == RegName) // Check if ChildKeyName equals RegName
+					{
+						string[] ActiveDeviceItems = null; // Initialize string array for storing information about the active devices for each audio item
+						DateTime[] ActiveDeviceItemTimes = null; // Initialize DateTime array for storing times when audio devices last held a particular audio role
+						int[] ActiveDeviceItemNumbers = new int[1];
+						string CurrentDeviceType = null; // Initialize string variable for storing current audio device type of interest
+						if (ChildKeyName == "Render") // Check if ChildKeyName is "Render" (signifies registry folder for audio playback devices)
+							CurrentDeviceType = "playback"; // Define the audio device type of interest
+						else if (ChildKeyName == "Capture") // Check if ChildKeyName is "Capture" (signifies registry folder for audio recording devices)
+							CurrentDeviceType = "recording"; // Define the audio device type of interest
+						using (RegistryKey TypeKey = ChildKey.OpenSubKey(ChildKeyName)) // Open subkey of ChildKey and store in TypeKey. "using" implemented for proper disposal.
+						{
+							int j = 1; // Initialize integer variable for tracking audio playback device count
+							foreach (string DeviceKeyName in TypeKey.GetSubKeyNames()) // Loop through each SubKeyName in TypeKey
+							{
+								using (RegistryKey DeviceKey = TypeKey.OpenSubKey(DeviceKeyName)) // Open subkey of RenderKey and store in DeviceKey. "using" implemented for proper disposal.
+								{
+									if (Convert.ToInt32(DeviceKey.GetValue("DeviceState")) == 1) // Check if current audio device is enabled
+									{
+										string CurrentDeviceInfo; // Declare string variable for storing information about the current audio device
+										using (RegistryKey DeviceKeyProperties = DeviceKey.OpenSubKey("Properties")) // Open "Properties" subkey of DeviceKey and store in DeviceKeyProperties. "using" implemented for proper disposal.
+										{
+											CurrentDeviceInfo = DeviceKeyProperties.GetValue("{a45c254e-df1c-4efd-8020-67d146a850e0},2").ToString(); // Retrieve the current device's type from the registry
+											AudioDeviceResults.Add((RequestedDeviceStatus != "verify" ? "Audio " + UppercaseFirst(CurrentDeviceType) + " Device" + (RequestedDeviceStatus == "enabled" ? " " + j++ + " = " : " = ") : UppercaseFirst(CurrentDeviceType) + "__") + CurrentDeviceInfo); // Store current audio device data
+											EnabledDeviceList += CurrentDeviceInfo + ";"; // Append CurrentDeviceInfo to EnabledDeviceList
+											if (CurrentDeviceType == "playback") // Check if CurrentDeviceType is "playback"
+												EnabledPlaybackDeviceList += CurrentDeviceInfo + ";"; // Append CurrentDeviceInfo to EnabledPlaybackDeviceList
+											else
+												EnabledRecordingDeviceList += CurrentDeviceInfo + ";"; // Append CurrentDeviceInfo to EnabledRecordingDeviceList
+										}
+										
+										string[] items = { "Level:0", "Level:1", "Level:2" }; // Initialize string array for storing the names of the different audio levels (i.e., roles) in the registry
+										float osVersion = float.Parse(Environment.OSVersion.Version.Major.ToString() + "." + Environment.OSVersion.Version.Minor.ToString()); // Retrieve the operating system's version number (major and minor)
+										if (osVersion <= 6.1) // Check if osVersion is less than or equal to 6.1 (OS is Windows 7 or earlier)
+											items = new string[] { "Role:0", "Role:1", "Role:2" }; // Reinitialize items array with corresponding roles in the registry
+										DateTime[] CurrentDeviceItemTimes = new DateTime[items.Length]; // Initialize DateTime array for storing times when the current audio devices last held a particular audio item
+										int[] CurrentDeviceItemNumbers = new int[items.Length]; // Initialize 
+										for (int i = 0; i < items.Length; i++) // Loop based on the size of the items string array
+										{
+											byte[] RegistryByteData = null;
+											int RegistryIntData = 0;
+											if (osVersion <= 6.1) // Check if osVersion is less than or equal to 6.1 (OS is Windows 7 or earlier)
+											{
+												RegistryByteData = (byte[])DeviceKey.GetValue(items[i]); // Extract audio device role data from the registry
+												if (RegistryByteData == null) // Check if the extracted data is null
+													continue; // Continue to next index in parent for loop
+												CurrentDeviceItemTimes[i] = GetRoleDateTime(RegistryByteData); // Retrieve item information from registry, convert this data to a DateTime, and store it
+											}
+											else
+											{
+												RegistryIntData = Convert.ToInt32(DeviceKey.GetValue(items[i])); // Extract audio device role data from the registry
+												if (RegistryIntData == 0) // Check if the extracted data is null
+													continue; // Continue to next index in parent for loop
+												CurrentDeviceItemNumbers[i] = RegistryIntData;
+											}
+										}
+										if (ActiveDeviceItems == null || ActiveDeviceItems.Length == 0) // Check if ActiveDeviceItems is null or empty
+										{
+											ActiveDeviceItems = new string[items.Length]; // Define ActiveDeviceItems string array
+											if (osVersion <= 6.1) // Check if osVersion is less than or equal to 6.1 (OS is Windows 7 or earlier)
+												ActiveDeviceItemTimes = new DateTime[items.Length]; // Initialize ActiveDeviceItemTimes DateTime array
+											else
+												ActiveDeviceItemNumbers = new int[items.Length]; // Reinitialize ActiveDeviceItemNumbers integer array
+										}
+										if (osVersion <= 6.1) // Check if osVersion is less than or equal to 6.1 (OS is Windows 7 or earlier)
+										{
+											for (int i = 0; i < items.Length; i++) // Loop based on the size of the items string array 
+											{
+												if (ActiveDeviceItemTimes[i] < CurrentDeviceItemTimes[i]) // Check if the ActiveDeviceItemTime at the current index is less than the CurrentDeviceItemTime at this index
+												{
+													ActiveDeviceItems[i] = CurrentDeviceInfo; // Set ActiveDeviceItems at current index to CurrentDeviceInfo
+													ActiveDeviceItemTimes[i] = CurrentDeviceItemTimes[i]; // Set ActiveDeviceItemTime at current index to corresponding CurrentDeviceItemTime at this index
+												}
+											}
+										}
+										else
+										{
+											for (int i = 0; i < items.Length; i++) // Loop based on the size of the items string array 
+											{
+												if (ActiveDeviceItemNumbers[i] <= CurrentDeviceItemNumbers[i]) // Check if the ActiveDeviceItemNumbers at the current index is less than or equal to the CurrentDeviceItemNumbers at this index
+												{
+													ActiveDeviceItems[i] = CurrentDeviceInfo; // Set ActiveDeviceItems at current index to CurrentDeviceInfo
+													ActiveDeviceItemNumbers[i] = CurrentDeviceItemNumbers[i]; // Set ActiveDeviceItemNumbers at current index to corresponding CurrentDeviceItemNumbers at this index
+												}
+											}
+										}
+										items = null; // Set items to null in preparation for garbage collection
+										CurrentDeviceItemTimes = null; // Set CurrentDeviceItemTimes to null in preparation for garbage collection
+										CurrentDeviceItemNumbers = null; // Set CurrentDeviceItemNumbers to null in preparation for garbage collection
+									}
+								}
+							}
+						}
+						ActiveDeviceItemNumbers = null; // Set ActiveDeviceItemNumbers to null in preparation for garbage collection
+						ActiveDeviceItemTimes = null; // Set ActiveDeviceItemTimes to null in preparation for garbage collection
+						VA.SetText("~~EnabledPlaybackDeviceList", EnabledPlaybackDeviceList); // Send EnabledPlaybackDeviceList back to VoiceAttack as text variable
+						VA.SetText("~~EnabledRecordingDeviceList", EnabledRecordingDeviceList); // Send EnabledRecordingDeviceList back to VoiceAttack as text variable						
+						
+						if (EnabledDeviceList != null) // Check if audio devices are enabled 
+						{
+							if (ActiveDeviceItems != null) // Check if audio devices have relevant roles (i.e., device roles have been found and stored)
+							{
+								for (int i = 0; i < ActiveDeviceItems.Length; i++) // Loop based on the size of the ActiveDeviceItems string array
+								{
+									string ItemName = null; // Initialize string variable for storing role description
+									switch (i) // Create switch statement based on integer i
+									{
+										case 0: // For case where i = 0
+											ItemName = "Default"; // Set ItemName							
+											break; // Break out of switch statement
+										case 1: // For case where i = 1
+												// There is the "Multimedia" role, but I don't believe this is currently used by Windows. 
+												// The code for this role will remain for possible future use.
+												//ItemName = "Multimedia"; // Set ItemName
+												//break; // Break out of switch statement
+											continue; // Immediately continue with next index in parent for loop
+										case 2: // For case where i = 2
+											ItemName = "Communications"; // Set ItemName
+											break; // Break out of switch statement
+									}
+									if (ActiveDeviceItems[i] != null) // Check if ActiveDeviceItem at current index is NOT null
+									{
+										for (int j = m; j < AudioDeviceResults.Count; j++) // Loop through each AudioDeviceResult
+										{
+											if (AudioDeviceResults[j].Contains(ActiveDeviceItems[i]) && !AudioDeviceResults[j].Contains("[DEFAULT]")) // Check if indexed AudioDeviceResults contains the index ActiveDeviceItem AND indexed AudioDeviceResults does not contain 'default'
+											{
+												AudioDeviceResults[j] += " [" + ItemName.ToUpper() + "]"; // Append audio device role info to indexed AudioDeviceResults
+												break; // Break out of parent 'for' loop
+											}
+										}
+									}
+								}
+								m += AudioDeviceResults.Count; // Increment m using the number of AudioDeviceResults
+							}
+						}
+						ActiveDeviceItems = null; // Set ActiveDeviceItems to null in preparation for garbage collection
+					}
+				}
+			}
+		}
+		
+		int PlaybackCount = 0;
+		int RecordingCount = 0;
+		foreach (string result in AudioDeviceResults)
+		{
+			if (result.Contains("Audio Playback Device "))
+				PlaybackCount++;
+			else if (result.Contains("Audio Recording Device "))
+				RecordingCount++;
+		}
+		if (PlaybackCount == 1 || RecordingCount == 1)
+		{
+			for (int i = 0; i < AudioDeviceResults.Count; i++)
+			{
+				if (PlaybackCount == 1)
+					AudioDeviceResults[i] = AudioDeviceResults[i].Replace("Audio Playback Device 1", "Audio Playback Device");
+				if (RecordingCount == 1)
+					AudioDeviceResults[i] = AudioDeviceResults[i].Replace("Audio Recording Device 1", "Audio Recording Device");
+			}
+		}
+		if (RequestedDeviceStatus != "enabled") // Check if RequestedDeviceStatus is NOT "enabled"
+		{
+			for (int i = 0; i < AudioDeviceResults.Count; i++) // Loop for each AudioDeviceResult
+			{
+				if (AudioDeviceResults[i].Contains("[DEFAULT]") || AudioDeviceResults[i].Contains("[COMMUNICATIONS]")) // Check if the AudioDeviceResult contains "default" or "communications"
+				{
+					if (RequestedDeviceStatus == "verify") // Check if RequestedDeviceStatus is "verify"
+					{
+						string VAVarBuilder = null; // Initialize string variable for creating a VoiceAttack text variable name
+						if (AudioDeviceResults[i].Contains("[DEFAULT]")) // Check if AudioDeviceResults contains "default"
+							VAVarBuilder = "~~Default"; // Construct the first portion of the VoiceAttack variable name
+						else
+							VAVarBuilder = "~~Communications"; // Construct the first portion of the VoiceAttack variable name
+						if (AudioDeviceResults[i].Contains("Playback__")) // Check if AudioDeviceResults contains "Playback__"
+						{
+							AudioDeviceResults[i] = AudioDeviceResults[i].Replace("Playback__", ""); // Remove "Playback__" from AudioDeviceResult
+							VAVarBuilder += "AudioPlaybackDevice"; // Append text to VoiceAttack variable name
+						}
+						else
+						{
+							AudioDeviceResults[i] = AudioDeviceResults[i].Replace("Recording__", ""); // Remove "Recording__" from AudioDeviceResult
+							VAVarBuilder += "AudioRecordingDevice"; // Append text to VoiceAttack variable name
+						}
+						AudioDeviceResults[i] = AudioDeviceResults[i].Substring(0, AudioDeviceResults[i].IndexOf("[")).Trim(); // Remove the text including and after "[" from indexed AudioDeviceResults
+						VA.SetText(VAVarBuilder, AudioDeviceResults[i]); // Send indexed AudioDeviceResults back to VoiceAttack as text variable with name stored in VAVarBuilder
+						//VA.WriteToLog(VAVarBuilder + " = " + AudioDeviceResults[i], "orange"); // Output the built VoiceAttack text variable's name and value (for debugging)
+					}
+					else
+					{
+						string AudioType = null; // Initialize string for storing audio role type
+						if (AudioDeviceResults[i].Contains("[DEFAULT]")) // Check if AudioDeviceResults contains "default"
+							AudioType = "Default "; // Set the audio device role type
+						else
+							AudioType = "Communications "; // Set the audio device role type
+						AudioDeviceResults[i] = AudioType + AudioDeviceResults[i].Substring(0, AudioDeviceResults[i].IndexOf("[")).Trim(); // Add audio device type info to AudioDeviceResults and trim the text including and after "[" from indexed AudioDeviceResults
+					}
+				}
+				else
+					AudioDeviceResults[i] = null; // Set indexed AudioDeviceResult to null
+			}
+		}
+		
+		if (RequestedDeviceStatus != "verify") // Check if RequestedDeviceStatus is NOT "verify"
+		{
+			foreach (string Device in AudioDeviceResults) // Loop through each Device in AudioDeviceResults
+				if (Device != null) // Check if Device is NOT null
+					VA.WriteToLog(Device, "blue"); // Output info to event log
+		}
+		AudioDeviceResults = null; // Set AudioDeviceResults to null in preparation for garbage collection
+		GC.Collect(); // Forces an immediate garbage collection of all generations
+	}
+	
+	// Function for converting registry data for an audio device into corresponding DateTime information
+	static DateTime GetRoleDateTime(byte[] binary)
+	{
+		if (binary == null || binary.Length != 16) // Check if binary is null or the length is not 16
+			throw new ArgumentException("Error converting registry data to DateTime"); // Throw an exception
+			
+		int year = Convert.ToInt32(binary[0] + binary[1]*256); // Extract year from registry data
+		int month = Convert.ToInt32(binary[2]); // Extract month from registry data
+		int day = Convert.ToInt32(binary[6]); // Extract day from registry data
+		int hour = Convert.ToInt32(binary[8]); // Extract hour from registry data
+		int minute = Convert.ToInt32(binary[10]); // Extract minute from registry data
+		int seconds = Convert.ToInt32(binary[12]); // Extract seconds from registry data
+		int milliseconds = Convert.ToInt32(binary[14] + binary[15]*256); // Extract milliseconds from registry data
+		return new DateTime(year, month, day, hour, minute, seconds, milliseconds).ToLocalTime(); // Return the converted DateTime data
+	}
+	
+	// Function for applying 'title case' to a string
+	static string UppercaseFirst(string s)
+	{
+		if (string.IsNullOrEmpty(s)) // Check if string s is null or empty
+			return string.Empty; // Return an empty string
+		char[] a = s.ToCharArray(); // Build a char array from string s
+		a[0] = char.ToUpper(a[0]); // Make first char in the array upper case
+		return new string(a); // Convert the char array into a string and return it
+	}
+}
+
+// References:
+// https://stackoverflow.com/questions/14668091/read-registry-binary-and-convert-to-string
+// https://msdn.microsoft.com/en-us/library/system.datetime.frombinary(v=vs.110).aspx
+// https://social.msdn.microsoft.com/Forums/vstudio/en-US/382c06b1-a660-47da-a6e6-a7b27404581a/regbinary-value-from-registry-to-date-format-conversion?forum=csharpgeneral
+// http://nircmd.nirsoft.net/setdefaultsounddevice.html
+// https://www.dotnetperls.com/uppercase-first-letter
